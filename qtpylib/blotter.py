@@ -53,7 +53,7 @@ from ezibpy import (
 )
 
 from qtpylib import (
-    tools, asynctools, path, futures, __version__
+    tools, asynctools, path, futures, btc_conn, __version__
 )
 
 # =============================================
@@ -121,6 +121,8 @@ class Blotter():
                  dbhost="localhost", dbport="3306", dbname="qtpy",
                  dbuser="root", dbpass="", dbskip=False, orderbook=False,
                  zmqport="12345", zmqtopic=None, **kwargs):
+
+        self.btcConn = None
 
         # whats my name?
         self.name = str(self.__class__).split('.')[-1].split("'")[0].lower()
@@ -350,6 +352,44 @@ class Blotter():
                     '[IB #%d] %s', msg.errorCode, msg.errorMsg)
 
     # -------------------------------------------
+    def btcCallback(self, timestamp, value):
+
+        tick = dict(ibDataTypes["RTVOL_TICKS"])
+        tick['price'] =  value
+        tick['size'] = 1
+        tick['time'] = timestamp
+        tick['volume'] = 1
+        tick['wap'] = 0
+        tick['single'] = 0
+
+        try:
+            tick['last'] = float(tick['price'])
+            tick['lastsize'] = float(tick['size'])
+            tick['volume'] = float(tick['volume'])
+            tick['wap'] = float(tick['wap'])
+            tick['single'] = tick['single'] == 'true'
+            tick['instrument'] = "BTCUSD"
+
+            # parse time
+            s, ms = divmod(int(tick['time'] * 1000), 1000)
+            tick['time'] = '{}.{:03d}'.format(
+                time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(s)), ms)
+
+            # add most recent bid/ask to "tick"
+            tick['bid'] = value
+            tick['bidsize'] = 1
+            tick['ask'] = value
+            tick['asksize'] = 1
+
+            # self.log.debug("%s: %s\n%s", tick['time'], self.tickerSymbol(msg.tickerId), tick)
+
+            # fire callback
+            self.on_btc_tick_string_received(tickerId=5, tick=tick)
+
+        except Exception as e:
+            print (e)
+
+    # -------------------------------------------
     def on_ohlc_received(self, msg, kwargs):
         symbol = self.ibConn.tickerSymbol(msg.reqId)
 
@@ -465,6 +505,52 @@ class Blotter():
 
             # print('.', end="", flush=True)
             self.on_tick_received(data)
+
+    # -------------------------------------------
+    @asynctools.multitasking.task
+    def on_btc_tick_string_received(self, tickerId, **kwargs):
+
+        # kwargs is empty
+        if not kwargs:
+            return
+
+        data = None
+        symbol = "BTCUSD"
+
+        # for instruments that receive RTVOLUME events
+        if "tick" in kwargs:
+            self.rtvolume.add(symbol)
+            data = {
+                # available data from ib
+                "symbol":       symbol,
+                "symbol_group": tools.gen_symbol_group(symbol),  # ES_F, ...
+                "asset_class":  tools.gen_asset_class(symbol),
+                "timestamp":    kwargs['tick']['time'],
+                "last":         kwargs['tick']['last'],
+                "lastsize":     int(kwargs['tick']['size']),
+                "bid":          kwargs['tick']['bid'],
+                "ask":          kwargs['tick']['ask'],
+                "bidsize":      int(kwargs['tick']['bidsize']),
+                "asksize":      int(kwargs['tick']['asksize']),
+                # "wap":          kwargs['tick']['wap'],
+            }
+
+        # proceed if data exists
+        if data is not None:
+            # cache last tick
+            if symbol in self.cash_ticks.keys():
+                if data == self.cash_ticks[symbol]:
+                    return
+
+            self.cash_ticks[symbol] = data
+
+            # add options fields
+            data = tools.force_options_columns(data)
+
+            # print('.', end="", flush=True)
+            self.on_tick_received(data)
+
+            print(data)
 
     # -------------------------------------------
     @asynctools.multitasking.task
@@ -762,6 +848,12 @@ class Blotter():
         contracts = []
         prev_contracts = []
         first_run = True
+
+        self.log_blotter.info("Connecting to BTC Server...")
+        self.btcConn = btc_conn.BtcConn()
+        self.btcConn.callback = self.btcCallback
+        self.btcConn.start()
+        self.log_blotter.info("Connection established...")
 
         self.log_blotter.info("Connecting to Interactive Brokers...")
         self.ibConn = ezIBpy()
