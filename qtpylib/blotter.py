@@ -550,8 +550,6 @@ class Blotter():
             # print('.', end="", flush=True)
             self.on_tick_received(data)
 
-            print(data)
-
     # -------------------------------------------
     @asynctools.multitasking.task
     def on_quote_received(self, tickerId):

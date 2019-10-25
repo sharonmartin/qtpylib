@@ -950,8 +950,11 @@ class DataStore():
 
         # shift position
         for sym in symbols:
-            recorded[sym + '_POSITION'] = recorded[sym + '_POSITION'
-                                                   ].shift(1).fillna(0)
+            try:
+                recorded[sym + '_POSITION'] = recorded[sym + '_POSITION'
+                                                       ].shift(1).fillna(0)
+            except:
+                recorded[sym + '_POSITION'] = 0
 
         # make this public
         self.recorded = recorded.copy()
